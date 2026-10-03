@@ -151,6 +151,18 @@
   /* ---------- empty ---------- */
   .empty{color:var(--dim); text-align:center; padding:48px 20px; font-size:13.5px; border:1px dashed var(--line); border-radius:var(--radius)}
 
+  /* ---------- toast ---------- */
+  .toast{
+    position:fixed; left:50%; bottom:26px; transform:translate(-50%,14px);
+    background:var(--panel2); border:1px solid var(--line); color:var(--fg);
+    padding:10px 16px; border-radius:9px; font-size:13px; box-shadow:0 10px 34px rgba(0,0,0,.5);
+    opacity:0; pointer-events:none; transition:.18s; z-index:50; max-width:min(560px,90vw);
+  }
+  .toast.on{opacity:1; transform:translate(-50%,0)}
+  .toast.good{border-color:var(--easy)}
+  .toast.bad{border-color:var(--hard)}
+  .toast.warn{border-color:var(--medium)}
+
   footer{margin-top:34px; padding-top:16px; border-top:1px solid var(--line); color:var(--dim); font-size:11.5px}
   footer code{font-family:var(--mono); color:var(--muted)}
   kbd{
@@ -173,12 +185,16 @@
     <div id="ring"></div>
     <div id="body"></div>
     <footer>
-      Progress is stored in this browser only. Item ids are hashed from
-      month, week, title and URL, so it survives upstream edits that only
-      reorder the list. &nbsp;Press <kbd>/</kbd> to search, <kbd>Esc</kbd> to clear.
+      Progress is stored in this browser only — use <b>Export</b> to save a JSON
+      copy you can import on another machine or commit to git. Item ids are
+      hashed from month, week, title and URL, so progress survives upstream
+      edits that only reorder the list. &nbsp;Press <kbd>/</kbd> to search,
+      <kbd>Esc</kbd> to clear.
     </footer>
   </main>
 </div>
+<div class="toast" id="toast"></div>
+<input type="file" id="importFile" accept="application/json,.json" hidden>
 
 <script src="data.js"></script>
 <script>
@@ -215,6 +231,105 @@ function save() {
   try { localStorage.setItem(KEY, JSON.stringify([...done])); } catch (e) {}
 }
 const isDone = id => done.has(id);
+
+// ---------- toast ----------
+let toastT = null;
+function toast(msg, kind) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast on' + (kind ? ' ' + kind : '');
+  clearTimeout(toastT);
+  toastT = setTimeout(() => { el.className = 'toast'; }, 3600);
+}
+
+// ---------- export / import ----------
+// Progress lives in localStorage, which is per-browser and per-origin: it does
+// not follow you to another machine, and a cleared profile loses it. Export
+// writes a JSON file you can move or commit; import reads one back.
+//
+// The file stores each item's title and URL alongside its id. Ids are hashes of
+// month+week+title+url, so a file exported from a fork whose curriculum has
+// since changed still imports cleanly -- the resolver falls back to matching on
+// title+url when the id is unknown here.
+const FILE_TAG = 'cp2go-progress';
+
+function exportPayload() {
+  return {
+    format: FILE_TAG,
+    version: 1,
+    exported: new Date().toISOString(),
+    total: TOTAL,
+    done: [...done].map(id => {
+      const it = BY_ID.get(id);
+      return it ? { id, t: it.t, u: it.u, m: it._m, w: it._w } : { id };
+    }),
+  };
+}
+
+function exportProgress() {
+  const blob = new Blob([JSON.stringify(exportPayload(), null, 1)], {type: 'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `cp2go-progress-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast(`Exported ${done.size} completed item${done.size === 1 ? '' : 's'}.`, 'good');
+}
+
+function importProgress(text) {
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    toast('That file is not valid JSON.', 'bad');
+    return;
+  }
+  // accept both the tagged object and a bare array of ids
+  const list = Array.isArray(data) ? data : (data && data.done);
+  if (!Array.isArray(list)) {
+    toast('No progress list found in that file.', 'bad');
+    return;
+  }
+
+  let matched = 0, byContent = 0, unknown = 0;
+  const next = new Set();
+  for (const e of list) {
+    const id = typeof e === 'string' ? e : e && e.id;
+    if (!id) continue;
+    if (BY_ID.has(id)) { next.add(id); matched++; continue; }
+    // id unknown here -- this file may come from a fork with a different
+    // curriculum, so fall back to matching the item by title and url
+    const t = typeof e === 'object' ? e.t : null;
+    const u = typeof e === 'object' ? e.u : null;
+    const alt = (t && u) ? ITEMS.find(i => i.t === t && i.u === u) : null;
+    if (alt) { next.add(alt.id); byContent++; } else { unknown++; }
+  }
+
+  if (!next.size) {
+    toast(unknown
+      ? `Nothing matched — ${unknown} item${unknown === 1 ? '' : 's'} in that file no longer exist in this curriculum.`
+      : 'That file had no completed items.', 'bad');
+    return;
+  }
+  const msg =
+    `Import ${next.size} completed item${next.size === 1 ? '' : 's'}?\n\n` +
+    `${[...next].filter(i => !done.has(i)).length} new` +
+    (matched ? `, ${matched} matched by id` : '') +
+    (byContent ? `, ${byContent} matched by title/URL` : '') +
+    (unknown ? `\n${unknown} could not be matched and will be skipped` : '') +
+    `\n\nThis replaces your current progress (${done.size} item${done.size === 1 ? '' : 's'}).`;
+  if (!confirm(msg)) return;
+
+  done = next;
+  save();
+  render();
+  toast(`Imported ${next.size} item${next.size === 1 ? '' : 's'}` +
+    (byContent ? ` (${byContent} re-matched by title/URL)` : '') +
+    (unknown ? ` · ${unknown} skipped` : '') + '.', unknown ? 'warn' : 'good');
+}
 
 // ---------- filters ----------
 const S = { week: 'all', kind: 'all', plat: 'all', diff: 'all', q: '' };
@@ -312,6 +427,8 @@ function renderBody() {
        [1,2,3].map(d => `<option value="${d}"${S.diff==String(d)?' selected':''}>${'★'.repeat(d)} and up</option>`).join('') +
        '</select>';
   if (anyFilter) h += `<button class="ghost" id="clear">Clear</button>`;
+  h += `<button class="ghost" id="export">Export</button>`;
+  h += `<button class="ghost" id="import">Import</button>`;
   h += `<button class="ghost" id="reset">Reset progress</button>`;
   h += '</div>';
   h += `<div class="count">${shown.length} of ${scope.length} shown</div>`;
@@ -408,6 +525,9 @@ function wire() {
       done.clear(); save(); render();
     }
   };
+  document.getElementById('export').onclick = exportProgress;
+  document.getElementById('import').onclick = () =>
+    document.getElementById('importFile').click();
   document.querySelectorAll('[data-toggle]').forEach(b => b.onclick = () => {
     const id = b.dataset.toggle;
     done.has(id) ? done.delete(id) : done.add(id);
@@ -431,6 +551,26 @@ document.addEventListener('keydown', e => {
   } else if (e.key === 'Escape') {
     if (document.activeElement.id === 'q') { S.q = ''; render(); }
   }
+});
+
+// Bound once: the input lives outside the re-rendered region, so the same
+// file can be re-selected immediately after an import.
+document.getElementById('importFile').addEventListener('change', e => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  const fr = new FileReader();
+  fr.onload = () => importProgress(String(fr.result));
+  fr.onerror = () => toast('Could not read that file.', 'bad');
+  fr.readAsText(f);
+  // reset so re-picking the same file still fires 'change'
+  e.target.value = '';
+});
+
+// paste a JSON blob anywhere as a shortcut for the file picker
+document.addEventListener('paste', e => {
+  if (document.activeElement.tagName === 'INPUT') return;
+  const txt = e.clipboardData && e.clipboardData.getData('text');
+  if (txt && txt.trim().startsWith('{')) importProgress(txt);
 });
 
 render();

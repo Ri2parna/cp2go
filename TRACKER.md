@@ -26,6 +26,41 @@ dependencies. Double-clicking the file works.
 - Progress saves to `localStorage` as you click. `Reset progress` clears it
   behind a confirm.
 
+## Export / import
+
+Progress lives in `localStorage`, which is **per-browser and per-origin** — it
+doesn't follow you to another machine, and clearing site data loses it. Use
+**Export** to download a `cp2go-progress-YYYY-MM-DD.json` file, and **Import**
+to load one back. You can also just paste the JSON anywhere on the page.
+
+```json
+{
+ "format": "cp2go-progress",
+ "version": 1,
+ "exported": "2026-10-03T07:21:37.823Z",
+ "total": 115,
+ "done": [
+  { "id": "3f7200a32e", "t": "Dynamic Programming Notes Hackerearth",
+    "u": "https://www.hackerearth.com/…", "m": 1, "w": 1 }
+ ]
+}
+```
+
+Two things worth knowing:
+
+- **Files are portable across forks.** Item IDs are hashes of
+  month + week + title + URL, so an ID from a fork whose curriculum has since
+  changed won't match. The file also stores each item's title and URL, so the
+  importer falls back to matching on those when the ID is unknown. Items that
+  exist nowhere in your copy are reported as skipped rather than silently
+  dropped.
+- **Import replaces, it does not merge.** You'll see a breakdown of what
+  matched before anything is overwritten. Export first if you want to keep the
+  current state.
+
+Because the file is plain JSON, you can commit it to git to keep progress
+across machines, or keep one per phase of the plan.
+
 ## Keeping it in sync with upstream
 
 `README.md` is the source of truth — this app does not hand-maintain a copy of
